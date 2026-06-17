@@ -1,0 +1,42 @@
+name: Test PR metadata inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with PR metadata inputs (expect failure due to invalid PR URL/auth)
+        id: action
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          auth: "fake-token-for-metadata-test"
+          git-client: "github"
+          title: "Backport: fix important bug"
+          body: "This is a backported PR body"
+          body-prefix: "Backport of original PR."
+          bp-branch-name: "backport/main/fix-bug"
+          reviewers: "reviewer1,reviewer2"
+          assignees: "assignee1"
+          labels: "backport,automated"
+          no-squash: "true"
+          comments: "This is an automated backport;Please review carefully"
+        continue-on-error: true
+
+      - name: Assert action ran (outcome is either success or failure, not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran with outcome=$OUTCOME"

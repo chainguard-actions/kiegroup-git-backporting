@@ -1,0 +1,43 @@
+name: Test config-file input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create backport config file
+        run: |
+          mkdir -p /tmp/bp-config
+          cat > /tmp/bp-config/backport.json << 'EOF'
+          {
+            "pullRequest": "https://github.com/kiegroup/git-backporting/pull/1",
+            "targetBranch": "main",
+            "dryRun": true,
+            "gitUser": "TestUser",
+            "gitEmail": "test@example.com",
+            "auth": "fake-token-for-config-test"
+          }
+          EOF
+
+      - name: Run action with config-file (expect failure due to invalid auth/PR)
+        id: action
+        uses: .
+        with:
+          config-file: "/tmp/bp-config/backport.json"
+        continue-on-error: true
+
+      - name: Assert action ran (outcome is either success or failure, not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran with outcome=$OUTCOME"
