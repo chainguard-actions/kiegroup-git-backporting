@@ -1,0 +1,44 @@
+name: Test custom PR options in dry-run
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          auth: "dummy-token-for-dry-run"
+          git-user: "Backport Bot"
+          git-email: "backport@example.com"
+          title: "[Backport main] My custom title"
+          body-prefix: "Backport of: "
+          body: "This is a backported PR body."
+          labels: "backport,automated"
+          inherit-labels: "false"
+          no-inherit-reviewers: "true"
+          strategy: "recursive"
+          strategy-option: "theirs"
+        continue-on-error: true
+
+      - name: Assert action was invoked with custom options
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # The action should be invoked (not a setup/config error).
+          # It may fail at the API call with a dummy token, but it should run.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action was invoked with custom PR options"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

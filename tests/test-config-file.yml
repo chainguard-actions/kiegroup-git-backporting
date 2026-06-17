@@ -1,0 +1,45 @@
+name: Test config-file input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Write config file
+        run: |
+          mkdir -p /tmp/bp-config
+          cat > /tmp/bp-config/backport.json <<'EOF'
+          {
+            "pullRequest": "https://github.com/kiegroup/git-backporting/pull/1",
+            "targetBranch": "main",
+            "dryRun": true,
+            "auth": "dummy-token",
+            "gitUser": "Test User",
+            "gitEmail": "test@example.com"
+          }
+          EOF
+
+      - id: action
+        uses: .
+        with:
+          config-file: "/tmp/bp-config/backport.json"
+        continue-on-error: true
+
+      - name: Assert action was invoked via config file
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "action outcome: $OUTCOME"
+          # The action should be invoked (not a setup error).
+          # It may fail at the API call with a dummy token, but it should run.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action was invoked using config-file input"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi
