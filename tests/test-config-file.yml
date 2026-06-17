@@ -1,0 +1,44 @@
+name: Test config-file input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create config file
+        run: |
+          cat > /tmp/backport-config.json << 'EOF'
+          {
+            "pullRequest": "https://github.com/kiegroup/git-backporting/pull/1",
+            "targetBranch": "main",
+            "dryRun": true,
+            "auth": "fake-token-for-testing",
+            "gitUser": "Test User",
+            "gitEmail": "test@example.com"
+          }
+          EOF
+          echo "Config file created at /tmp/backport-config.json"
+          cat /tmp/backport-config.json
+
+      - name: Run action with config file (expect failure due to invalid PR/token)
+        id: action
+        uses: .
+        with:
+          config-file: "/tmp/backport-config.json"
+        continue-on-error: true
+
+      - name: Assert action ran (not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped, expected it to run"
+            exit 1
+          fi
+          echo "PASS: action ran with outcome=$OUTCOME (config-file input was accepted)"

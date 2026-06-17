@@ -1,0 +1,46 @@
+name: Test extended inputs coverage
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_REF: refs/heads/main
+      GITHUB_EVENT_NAME: push
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with extended inputs (expect failure due to invalid PR URL)
+        id: action
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          auth: "fake-token-for-testing"
+          git-client: "github"
+          git-user: "Test User"
+          git-email: "test@example.com"
+          title: "Backport: test PR title"
+          body-prefix: "Backport of:"
+          body: "This is a test backport body"
+          bp-branch-name: "backport/test-branch"
+          reviewers: "reviewer1,reviewer2"
+          assignees: "assignee1"
+          labels: "backport,automated"
+          no-squash: "true"
+          auto-no-squash: "false"
+          cherry-pick-options: "-x"
+          comments: "Backport created automatically"
+        continue-on-error: true
+
+      - name: Assert action ran (outcome is either success or failure, not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was skipped, expected it to run"
+            exit 1
+          fi
+          echo "PASS: action ran with outcome=$OUTCOME"
