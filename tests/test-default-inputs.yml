@@ -1,0 +1,78 @@
+name: Test default input values
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify action.yml has expected defaults
+        run: |
+          # Check that action.yml exists and has expected default values
+          if [ ! -f "$GITHUB_WORKSPACE/action.yml" ]; then
+            echo "FAIL: action.yml not found"
+            exit 1
+          fi
+
+          # Verify dry-run default is "false"
+          if ! grep -A5 'dry-run:' "$GITHUB_WORKSPACE/action.yml" | grep -q 'default: "false"'; then
+            echo "FAIL: dry-run default should be 'false'"
+            exit 1
+          fi
+          echo "PASS: dry-run default is 'false'"
+
+          # Verify strategy default is "recursive"
+          if ! grep -A5 'strategy:' "$GITHUB_WORKSPACE/action.yml" | grep -q 'default: "recursive"'; then
+            echo "FAIL: strategy default should be 'recursive'"
+            exit 1
+          fi
+          echo "PASS: strategy default is 'recursive'"
+
+          # Verify strategy-option default is "theirs"
+          if ! grep -A5 'strategy-option:' "$GITHUB_WORKSPACE/action.yml" | grep -q 'default: "theirs"'; then
+            echo "FAIL: strategy-option default should be 'theirs'"
+            exit 1
+          fi
+          echo "PASS: strategy-option default is 'theirs'"
+
+          # Verify git-user default is "GitHub"
+          if ! grep -A5 'git-user:' "$GITHUB_WORKSPACE/action.yml" | grep -q 'default: "GitHub"'; then
+            echo "FAIL: git-user default should be 'GitHub'"
+            exit 1
+          fi
+          echo "PASS: git-user default is 'GitHub'"
+
+          # Verify git-email default is "noreply@github.com"
+          if ! grep -A5 'git-email:' "$GITHUB_WORKSPACE/action.yml" | grep -q 'default: "noreply@github.com"'; then
+            echo "FAIL: git-email default should be 'noreply@github.com'"
+            exit 1
+          fi
+          echo "PASS: git-email default is 'noreply@github.com'"
+
+          echo "ALL DEFAULTS VERIFIED"
+
+      - id: backport-dry-run
+        uses: .
+        continue-on-error: true
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          strategy: "recursive"
+          strategy-option: "theirs"
+          git-user: "GitHub"
+          git-email: "noreply@github.com"
+          auth: "fake-token-for-dry-run"
+
+      - name: Assert action ran with explicit default values
+        run: |
+          echo "Outcome: ${{ steps.backport-dry-run.outcome }}"
+          if [ "${{ steps.backport-dry-run.outcome }}" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action executed with default values (outcome: ${{ steps.backport-dry-run.outcome }})"

@@ -1,0 +1,40 @@
+name: Test missing required inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify dist entrypoint exists
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/dist/gha/index.js" ]; then
+            echo "FAIL: dist/gha/index.js not found"
+            exit 1
+          fi
+          echo "PASS: dist/gha/index.js exists"
+
+      - id: backport-no-inputs
+        uses: .
+        continue-on-error: true
+        with:
+          dry-run: "true"
+          auth: "fake-token"
+
+      - name: Assert action fails gracefully without pull-request input
+        run: |
+          echo "Outcome: ${{ steps.backport-no-inputs.outcome }}"
+          # Without a pull-request URL, the action should fail (not skip or succeed)
+          if [ "${{ steps.backport-no-inputs.outcome }}" = "success" ]; then
+            echo "FAIL: expected action to fail without required inputs, but it succeeded"
+            exit 1
+          fi
+          if [ "${{ steps.backport-no-inputs.outcome }}" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action failed as expected without required inputs (outcome: ${{ steps.backport-no-inputs.outcome }})"

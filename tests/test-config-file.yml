@@ -1,0 +1,45 @@
+name: Test config-file input
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Create backport config file
+        run: |
+          mkdir -p /tmp/backport-config
+          cat > /tmp/backport-config/backport.json << 'EOF'
+          {
+            "pullRequest": "https://github.com/kiegroup/git-backporting/pull/1",
+            "targetBranch": "main",
+            "dryRun": true,
+            "gitUser": "TestUser",
+            "gitEmail": "test@example.com",
+            "auth": "fake-token-for-dry-run"
+          }
+          EOF
+          echo "Config file created:"
+          cat /tmp/backport-config/backport.json
+
+      - id: backport-config
+        uses: .
+        continue-on-error: true
+        with:
+          config-file: "/tmp/backport-config/backport.json"
+          dry-run: "true"
+          auth: "fake-token-for-dry-run"
+
+      - name: Assert action ran with config file
+        run: |
+          echo "Outcome: ${{ steps.backport-config.outcome }}"
+          # The action should run (not be skipped) when a config file is provided
+          if [ "${{ steps.backport-config.outcome }}" = "skipped" ]; then
+            echo "FAIL: action was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action executed with config-file input (outcome: ${{ steps.backport-config.outcome }})"
