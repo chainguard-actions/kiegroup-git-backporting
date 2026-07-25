@@ -1,0 +1,56 @@
+# this workflow prepare the project for the next release, it will update changelog and version based on the previous commits.
+# after that it will open a pull request for this change
+name: "prepare release"
+
+on: 
+  workflow_dispatch:
+    inputs:
+      options:
+        description: 'Additional release-it options'     
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Git config
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+      - name: Npm config
+        run: npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
+      - run: npm ci
+      - name: Compute next version
+        run: |
+          next_version=$(npx release-it --release-version --no-git.requireCleanWorkingDir)
+          echo "NEXT_VERSION=${next_version}" >> $GITHUB_ENV
+      - name: Prepare the release changes
+        env:
+          OPTIONS: ${{ github.event.inputs.options }}
+        run: npm run release:prepare -- --ci --no-git.commit ${OPTIONS:+"$OPTIONS"}
+      - name: Create Pull Request
+        uses: gr2m/create-or-update-pull-request-action@483e2e5c8e68c420e72687127cfdc30a45254be7 # v1.x
+        with:
+          title: "chore: release v${{ env.NEXT_VERSION }}"
+          body: >
+            Creating changes for the next release.
+          branch: release/v${{ env.NEXT_VERSION }}
+          commit-message: "chore: release v${{ env.NEXT_VERSION }}"
+          reviewers: mareknovotny,lampajr

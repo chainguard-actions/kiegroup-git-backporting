@@ -1,0 +1,43 @@
+name: "release package"
+
+on: 
+  workflow_dispatch:
+    inputs:
+      options:
+        description: 'Additional release-it options'     
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+jobs:
+  release:
+    name: Release package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Git config
+        run: |
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+      - name: Npm config
+        run: npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
+      - run: npm ci
+      # the version/changelog must be already updated on main branch using "npm run release:prepare"
+      # or check prepare-release.yml workflow
+      - name: New version release
+        env:
+          OPTIONS: ${{ github.event.inputs.options }}
+        run: npm run release -- --ci --no-increment --no-git.commit ${OPTIONS:+"$OPTIONS"}

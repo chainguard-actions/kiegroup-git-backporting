@@ -1,0 +1,24 @@
+name: Test missing required inputs error handling
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: backport
+        uses: .
+        with:
+          dry-run: "true"
+          # Intentionally omit pull-request and target-branch to trigger validation error
+        continue-on-error: true
+
+      - name: Assert action failed with missing inputs
+        run: |
+          echo "outcome: ${{ steps.backport.outcome }}"
+          if [ "${{ steps.backport.outcome }}" != "failure" ]; then
+            echo "FAIL: expected action to fail when pull-request and target-branch are missing, got: ${{ steps.backport.outcome }}"
+            exit 1
+          fi
+          echo "PASS: action correctly failed when required inputs were missing"

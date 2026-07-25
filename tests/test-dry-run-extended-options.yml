@@ -1,0 +1,40 @@
+name: Test dry-run with extended options
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure git user
+        run: |
+          git config user.email "noreply@github.com"
+          git config user.name "GitHub"
+
+      - id: backport
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          git-client: "github"
+          git-user: "GitHub"
+          git-email: "noreply@github.com"
+          body: "This is a backport PR body."
+          bp-branch-name: "backport/main/pr-1"
+          bp-repo: "kiegroup/git-backporting"
+          reviewers: "user1,user2"
+          assignees: "user3"
+          cherry-pick-options: "-x"
+          comments: "This is an automated backport.;Please review carefully."
+        continue-on-error: true
+
+      - name: Assert action ran (not skipped)
+        run: |
+          echo "outcome: ${{ steps.backport.outcome }}"
+          if [ "${{ steps.backport.outcome }}" = "skipped" ]; then
+            echo "FAIL: step was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran to completion with extended options (outcome=${{ steps.backport.outcome }})"

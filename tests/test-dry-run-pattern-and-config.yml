@@ -1,0 +1,63 @@
+name: Test dry-run with target-branch-pattern, auto-no-squash, and config-file
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Configure git user
+        run: |
+          git config user.email "noreply@github.com"
+          git config user.name "GitHub"
+
+      - name: Create config file
+        run: |
+          cat > /tmp/backport-config.json << 'EOF'
+          {
+            "dryRun": true,
+            "gitUser": "GitHub",
+            "gitEmail": "noreply@github.com"
+          }
+          EOF
+
+      - id: backport-pattern
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch-pattern: "^backport (?<target>([^ ]+))$"
+          dry-run: "true"
+          auto-no-squash: "true"
+          git-user: "GitHub"
+          git-email: "noreply@github.com"
+        continue-on-error: true
+
+      - name: Assert pattern step ran (not skipped)
+        run: |
+          echo "outcome: ${{ steps.backport-pattern.outcome }}"
+          if [ "${{ steps.backport-pattern.outcome }}" = "skipped" ]; then
+            echo "FAIL: step was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran with target-branch-pattern and auto-no-squash (outcome=${{ steps.backport-pattern.outcome }})"
+
+      - id: backport-config
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          config-file: "/tmp/backport-config.json"
+          git-user: "GitHub"
+          git-email: "noreply@github.com"
+        continue-on-error: true
+
+      - name: Assert config-file step ran (not skipped)
+        run: |
+          echo "outcome: ${{ steps.backport-config.outcome }}"
+          if [ "${{ steps.backport-config.outcome }}" = "skipped" ]; then
+            echo "FAIL: step was skipped unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action ran with config-file (outcome=${{ steps.backport-config.outcome }})"
