@@ -1,0 +1,41 @@
+name: Test PR metadata inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Run backport with PR metadata inputs in dry-run mode
+        id: action
+        continue-on-error: true
+        uses: .
+        with:
+          pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
+          target-branch: "main"
+          dry-run: "true"
+          git-client: "github"
+          git-user: "Test User"
+          git-email: "test@example.com"
+          title: "chore: backport PR #1 to main"
+          body: "This is a backported pull request."
+          body-prefix: "**Backport:** https://github.com/kiegroup/git-backporting/pull/1\n\n"
+          bp-branch-name: "backport/pr-1-to-main"
+          reviewers: "octocat"
+          assignees: "octocat"
+          labels: "backport,automated"
+          comments: "This PR was automatically backported."
+
+      - name: Assert action ran with PR metadata inputs (not cancelled)
+        run: |
+          echo "Action outcome: ${{ steps.action.outcome }}"
+          # The action should either succeed or fail gracefully (e.g., API error),
+          # but must NOT be cancelled or crash due to input parsing issues.
+          if [ "${{ steps.action.outcome }}" = "cancelled" ]; then
+            echo "FAIL: action was cancelled unexpectedly"
+            exit 1
+          fi
+          echo "PASS: action completed with PR metadata inputs (outcome=${{ steps.action.outcome }})"

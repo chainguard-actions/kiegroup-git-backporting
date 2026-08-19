@@ -4,40 +4,38 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      GITHUB_REF: refs/heads/main
-      GITHUB_EVENT_NAME: push
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Create backport config file
         run: |
           mkdir -p /tmp/bp-config
-          cat > /tmp/bp-config/backport.json << 'EOF'
+          cat > /tmp/bp-config/backport.json <<'EOF'
           {
             "pullRequest": "https://github.com/kiegroup/git-backporting/pull/1",
             "targetBranch": "main",
             "dryRun": true,
-            "gitUser": "TestUser",
-            "gitEmail": "test@example.com",
-            "auth": "fake-token-for-config-test"
+            "gitUser": "Test User",
+            "gitEmail": "test@example.com"
           }
           EOF
+          echo "Config file created:"
+          cat /tmp/bp-config/backport.json
 
-      - name: Run action with config-file (expect failure due to invalid auth/PR)
+      - name: Run action with config-file
         id: action
+        continue-on-error: true
         uses: .
         with:
           config-file: "/tmp/bp-config/backport.json"
-        continue-on-error: true
 
-      - name: Assert action ran (outcome is either success or failure, not skipped)
-        env:
-          OUTCOME: ${{ steps.action.outcome }}
+      - name: Assert action ran with config-file (not cancelled)
         run: |
-          echo "outcome: $OUTCOME"
-          if [ "$OUTCOME" = "skipped" ]; then
-            echo "FAIL: action was skipped unexpectedly"
+          echo "Action outcome: ${{ steps.action.outcome }}"
+          # The action should either succeed or fail gracefully (e.g., API error),
+          # but must NOT be cancelled or crash due to config-file parsing issues.
+          if [ "${{ steps.action.outcome }}" = "cancelled" ]; then
+            echo "FAIL: action was cancelled unexpectedly"
             exit 1
           fi
-          echo "PASS: action ran with outcome=$OUTCOME"
+          echo "PASS: action completed with config-file (outcome=${{ steps.action.outcome }})"

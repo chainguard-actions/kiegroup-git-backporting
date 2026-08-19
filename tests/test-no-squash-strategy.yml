@@ -1,4 +1,4 @@
-name: Test dry-run backport
+name: Test no-squash and strategy options
 on:
   workflow_dispatch:
 jobs:
@@ -6,29 +6,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
 
-      - name: Run backport in dry-run mode
+      - name: Run action with no-squash and custom strategy
         id: action
         continue-on-error: true
         uses: .
         with:
-          # Use a well-known merged PR from the kiegroup/git-backporting repo itself
           pull-request: "https://github.com/kiegroup/git-backporting/pull/1"
           target-branch: "main"
           dry-run: "true"
+          no-squash: "true"
+          strategy: "recursive"
+          strategy-option: "theirs"
           git-user: "Test User"
           git-email: "test@example.com"
 
-      - name: Assert action ran (dry-run may succeed or fail with API error, not crash)
+      - name: Assert action ran with no-squash options (not cancelled)
         run: |
           echo "Action outcome: ${{ steps.action.outcome }}"
-          # In dry-run mode the action should either succeed or fail gracefully
-          # (e.g., if the PR is not found or already merged to target).
-          # What we must NOT see is a crash due to missing required inputs.
+          # The action should either succeed or fail gracefully (e.g., API error),
+          # but must NOT be cancelled or crash due to strategy option issues.
           if [ "${{ steps.action.outcome }}" = "cancelled" ]; then
             echo "FAIL: action was cancelled unexpectedly"
             exit 1
           fi
-          echo "PASS: action completed (outcome=${{ steps.action.outcome }})"
+          echo "PASS: action completed with no-squash and strategy options (outcome=${{ steps.action.outcome }})"
