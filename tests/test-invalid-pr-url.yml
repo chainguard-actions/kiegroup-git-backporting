@@ -1,0 +1,30 @@
+name: Test invalid pull-request URL
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run backport action with invalid PR URL
+        id: action
+        uses: .
+        with:
+          pull-request: "https://github.com/nonexistent-org-xyz/nonexistent-repo-xyz/pull/99999"
+          target-branch: "main"
+          dry-run: "true"
+          git-user: "Test User"
+          git-email: "test@example.com"
+        continue-on-error: true
+
+      - name: Assert action failed gracefully for invalid PR
+        run: |
+          echo "Action outcome: ${{ steps.action.outcome }}"
+          # The action should fail (not succeed) when given a non-existent PR URL,
+          # because it cannot fetch the PR details from GitHub API.
+          if [ "${{ steps.action.outcome }}" != "failure" ]; then
+            echo "FAIL: expected action to fail for non-existent PR, got: ${{ steps.action.outcome }}"
+            exit 1
+          fi
+          echo "PASS: action correctly failed for invalid/non-existent PR URL"
