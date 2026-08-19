@@ -1,4 +1,4 @@
-name: Test missing required inputs error handling
+name: Test invalid PR URL error handling
 on:
   workflow_dispatch:
 jobs:
@@ -7,19 +7,21 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run backport with no pull-request or target-branch
+      - name: Run backport with invalid PR URL
         id: action
         uses: .
         with:
+          pull-request: "https://github.com/invalid-org-xyz/invalid-repo-xyz/pull/99999"
+          target-branch: "main"
           dry-run: "true"
           auth: ${{ github.token }}
         continue-on-error: true
 
-      - name: Assert action failed on missing inputs
+      - name: Assert action failed on invalid PR
         run: |
           echo "Action outcome: ${{ steps.action.outcome }}"
           if [ "${{ steps.action.outcome }}" != "failure" ]; then
-            echo "FAIL: expected action to fail with missing inputs, got: ${{ steps.action.outcome }}"
+            echo "FAIL: expected action to fail with invalid PR URL, got: ${{ steps.action.outcome }}"
             exit 1
           fi
-          echo "PASS: action correctly failed on missing required inputs"
+          echo "PASS: action correctly failed on invalid PR URL"

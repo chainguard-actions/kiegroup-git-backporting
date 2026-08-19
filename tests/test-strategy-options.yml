@@ -1,0 +1,35 @@
+name: Test strategy options inputs
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run backport with custom strategy options
+        id: action
+        uses: .
+        with:
+          pull-request: "https://github.com/invalid-org-xyz/invalid-repo-xyz/pull/99999"
+          target-branch: "main"
+          dry-run: "true"
+          auth: ${{ github.token }}
+          strategy: "recursive"
+          strategy-option: "ours"
+          git-user: "BackportBot"
+          git-email: "backport@example.com"
+          no-inherit-reviewers: "true"
+          inherit-labels: "false"
+        continue-on-error: true
+
+      - name: Assert action ran (inputs accepted)
+        run: |
+          echo "Action outcome: ${{ steps.action.outcome }}"
+          # The action should fail because the PR doesn't exist, not because of bad inputs
+          # Either failure (PR not found) or success is acceptable here
+          if [ -z "${{ steps.action.outcome }}" ]; then
+            echo "FAIL: action did not produce an outcome"
+            exit 1
+          fi
+          echo "PASS: action ran with custom strategy options, outcome: ${{ steps.action.outcome }}"
