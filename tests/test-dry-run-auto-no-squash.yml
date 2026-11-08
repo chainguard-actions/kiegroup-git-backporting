@@ -1,0 +1,62 @@
+name: Test dry-run backport with auto-no-squash
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Discover a recently merged pull request
+        id: pr
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: kiegroup/git-backporting
+        run: |
+          set -euo pipefail
+          AUTH=()
+          if [ -n "${TOKEN:-}" ]; then AUTH=(-H "Authorization: Bearer $TOKEN"); fi
+          BASE="$(curl -fsSL "${AUTH[@]}" "https://api.github.com/repos/$REPO" | jq -r '.default_branch')"
+          echo "default branch: $BASE"
+          curl -fsSL "${AUTH[@]}" \
+            "https://api.github.com/repos/$REPO/pulls?state=closed&base=$BASE&sort=updated&direction=desc&per_page=50" > /tmp/prs.json
+          URL="$(jq -r '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | last | .html_url' /tmp/prs.json)"
+          echo "selected PR: $URL"
+          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
+            echo "FAIL: could not find a merged pull request"
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          rm -rf "$GITHUB_WORKSPACE/bp"
+      - id: action
+        uses: .
+        with:
+          pull-request: ${{ steps.pr.outputs.url }}
+          target-branch: ${{ steps.pr.outputs.base }}
+          bp-branch-name: act-test-auto-no-squash-branch
+          auto-no-squash: "true"
+          dry-run: "true"
+      - name: Assert dry-run backport prepared the local branch
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          if [ "$OUTCOME" != "success" ]; then
+            echo "FAIL: expected success"
+            exit 1
+          fi
+          DIR="$GITHUB_WORKSPACE/bp"
+          if [ ! -d "$DIR/.git" ]; then
+            echo "FAIL: repository was not cloned into $DIR"
+            exit 1
+          fi
+          BRANCH="$(git -C "$DIR" rev-parse --abbrev-ref HEAD)"
+          echo "current branch: $BRANCH"
+          if [ "$BRANCH" != "act-test-auto-no-squash-branch" ]; then
+            echo "FAIL: expected backport branch 'act-test-auto-no-squash-branch'"
+            exit 1
+          fi
+          echo "PASS"
+      - name: Cleanup clone folder
+        if: always()
+        run: rm -rf "$GITHUB_WORKSPACE/bp"

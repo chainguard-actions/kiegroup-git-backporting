@@ -1,0 +1,392 @@
+import ArgsParser from "@bp/service/args/args-parser";
+import { Args } from "@bp/service/args/args.types";
+import { Configs } from "@bp/service/configs/configs.types";
+import PullRequestConfigsParser from "@bp/service/configs/pullrequest/pr-configs-parser";
+import GitCLIService, { NonFastForwardError } from "@bp/service/git/git-cli";
+import GitClient, { PullRequestExists } from "@bp/service/git/git-client";
+import GitClientFactory from "@bp/service/git/git-client-factory";
+import { BackportPullRequest, GitClientType } from "@bp/service/git/git.types";
+import LoggerService from "@bp/service/logger/logger-service";
+import LoggerServiceFactory from "@bp/service/logger/logger-service-factory";
+import { inferGitClient, inferGitApiUrl, getGitTokenFromEnv } from "@bp/service/git/git-util";
+import { injectError, injectTargetBranch } from "./runner-util";
+
+interface Git {
+  gitClientType: GitClientType;
+  gitClientApi: Pick<GitClient, ("getLatestPullRequestComments" | "createPullRequest" | "createPullRequestComment")>;
+  gitCli: Pick<GitCLIService, ("clone" | "createLocalBranch" | "fetch" | "hasRemoteOriginalWork" | "hasLocalOriginalWork" | "cherryPick" | "addRemote" | "push" | "pointToSameCommit" )>;
+}
+
+/**
+ * Main runner implementation, it implements the core logic flow
+ */
+export default class Runner {
+
+  private logger: LoggerService;
+  private argsParser: ArgsParser;
+
+  constructor(parser: ArgsParser) {
+    this.logger = LoggerServiceFactory.getLogger();
+    this.argsParser = parser;
+  }
+
+  /**
+   * Entry point invoked by the command line or gha
+   */
+  async run(): Promise<void> {
+    try {
+      await this.execute();
+
+      this.logger.info("Process succeeded");
+      process.exit(0);
+
+    } catch (error) {
+      this.logger.error(`${error}`);
+
+      this.logger.info("Process failed");
+      process.exit(1);
+    }
+  }
+
+  /**
+   * Core logic
+   */
+  async execute(): Promise<void>{
+
+    // 1. parse args
+    const args: Args = this.argsParser.parse();
+
+    if (args.dryRun) {
+      this.logger.warn("Dry run enabled");
+    }
+
+    // 2. init git service
+    let gitClientType: GitClientType;
+    if (args.gitClient === undefined) {
+      gitClientType = inferGitClient(args.pullRequest);
+    } else {
+      gitClientType = args.gitClient as GitClientType;
+    }
+    // the api version is ignored in case of github
+    const apiUrl = inferGitApiUrl(args.pullRequest, gitClientType === GitClientType.CODEBERG ? "v1" : undefined);
+    const token = this.fetchToken(args, gitClientType);
+    const gitApi: GitClient = GitClientFactory.getOrCreate(gitClientType, token, apiUrl);
+
+    // 3. parse configs
+    this.logger.debug("Parsing configs..");
+    args.auth = token; // override auth
+    const configs: Configs = await new PullRequestConfigsParser().parseAndValidate(args);
+    const backportPRs: BackportPullRequest[] = configs.backportPullRequests;
+
+    // start local git operations
+    const git: GitCLIService = new GitCLIService(configs.auth, configs.git);
+
+    const failures: string[] = [];
+    // we need sequential backporting as they will operate on the same folder
+    // avoid cloning the same repo multiple times
+    for (const pr of backportPRs) {
+      this.logger.setContext(pr.base);
+      try {
+        await this.executeBackport(configs, pr, {
+          gitClientType: gitClientType,
+          gitClientApi: gitApi,
+          gitCli: git,
+        });
+      } catch (error) {
+        failures.push(error as string);
+      }
+      this.logger.clearContext();
+    }
+
+    if (failures.length > 0) {
+      throw new Error(`Failure occurred during one of the backports: [${failures.join(" ; ")}]`);
+    }
+  }
+
+  /**
+   * Fetch the GIT token from the provided Args obj, if not empty, otherwise fallback
+   * to the environment variables.
+   * @param args input arguments
+   * @param gitType git client type
+   * @returns the provided or fetched token, or undefined if not set anywhere
+   */
+  fetchToken(args: Args, gitType: GitClientType): string | undefined {
+    let token = args.auth;
+    if (token === undefined) {
+      // try to fetch the auth from env variable
+      this.logger.info("Auth argument not provided, checking available tokens from env..");
+      token = getGitTokenFromEnv(gitType);
+      if (!token) {
+        this.logger.info("Git token not found in the environment");
+      }
+    }
+
+    return token;
+  }
+
+  /**
+   * Check whether a previous run already reported a failed backport to the same
+   * target branch, by looking for a hidden marker in the latest comments of the
+   * original pull request.
+   * @returns true if the failure has already been reported, false otherwise or if
+   *          the comments could not be fetched
+   */
+  private async failureAlreadyReported(configs: Configs, backportPR: BackportPullRequest, git: Git): Promise<boolean> {
+    try {
+      const comments = await git.gitClientApi.getLatestPullRequestComments(configs.originalPullRequest.url);
+      return comments.some(c => c.includes(failureMarker(backportPR.base)));
+    } catch (error) {
+      this.logger.warn(`Unable to fetch the comments of ${configs.originalPullRequest.url}: ${error}`);
+      return false;
+    }
+  }
+
+  async executeBackport(configs: Configs, backportPR: BackportPullRequest, git: Git): Promise<void> {
+    const notifyError = !configs.dryRun && configs.errorNotification.enabled && configs.errorNotification.message.length > 0;
+
+    if (notifyError && await this.failureAlreadyReported(configs, backportPR, git)) {
+      this.logger.warn(`Backport to ${backportPR.base} already failed. Delete failure comment to retry. Skipping.`);
+      return;
+    }
+
+    let i = 0;
+    for (const step of backportSteps(this.logger, configs, backportPR, git)) {
+      try {
+        await step();
+      } catch (error) {
+        this.logger.error(`Something went wrong backporting to ${backportPR.base}: ${error}`);
+        if (notifyError) {
+          // notify the failure as comment in the original pull request
+          let comment = injectError(configs.errorNotification.message, error as string);
+          comment = injectTargetBranch(comment, backportPR.base);
+          try {
+            let script = "\n\nReconstruction of the attempted steps (beware that escaping may be missing):\n```sh\n";
+            script += await backportScript(configs, backportPR, git, i);
+            script += "```";
+            comment += script;
+          } catch (scriptError) {
+            this.logger.error(`Something went wrong reconstructing the script: ${scriptError}`);
+          }
+          comment += `\n\nThe backport to \`${backportPR.base}\` will not be retried until this comment is deleted.`;
+          comment += `\n\n${failureMarker(backportPR.base)}`;
+          await git.gitClientApi.createPullRequestComment(configs.originalPullRequest.url, comment);
+        }
+        throw error;
+      }
+      i++;
+    }
+  }
+}
+
+
+// Hidden marker appended to the failure notification comment.
+function failureMarker(base: string): string {
+  return `<!-- git-backporting: backport to ${base} failed -->`;
+}
+
+function* backportSteps(logger: Pick<LoggerService, "debug" | "info" | "warn">, configs: Configs, backportPR: BackportPullRequest, git: Git): Generator<() => Promise<void>, void, unknown> {
+  // every failible operation should be in one dedicated closure
+
+  // whether the backport pr targets a different repository than the original pull request's one (--tb-repo),
+  // in which case the original pr's commits are not reachable from a clone of the backport target repo alone
+  const usingDifferentTargetRepo = backportPR.cloneUrl !== configs.originalPullRequest.targetRepo.cloneUrl;
+
+  // 4. clone the repository
+  yield async () => {
+    logger.debug("Cloning repo..");
+    await git.gitCli.clone(backportPR.cloneUrl, configs.folder, backportPR.base);
+  };
+
+  // 5. create new branch from target one and checkout
+  yield async () => {
+    logger.debug("Creating local branch..");
+    await git.gitCli.createLocalBranch(configs.folder, backportPR.head);
+  };
+
+  if (usingDifferentTargetRepo) {
+    // 6. add a remote pointing to the original pull request's repository, needed to fetch
+    // commits that only exist there, since the backport target repo won't have them
+    const commitsRemote = "upstream";
+    yield async () => {
+      await git.gitCli.addRemote(configs.folder, configs.originalPullRequest.targetRepo.cloneUrl, commitsRemote);
+    };
+
+    // 7. fetch the exact commits to backport from the original repository.
+    // Fetching "pull/<N>/head" is not enough here: for a merged (or squashed) pull request the
+    // commit to cherry-pick is the merge/squash commit which lives on the base branch, not on
+    // "pull/<N>/head". Fetching the shas directly makes them available regardless of squash mode.
+    yield async () => {
+      logger.debug("Fetching commits to backport from the original repository..");
+      for (const sha of configs.originalPullRequest.commits) {
+        await git.gitCli.fetch(configs.folder, sha, commitsRemote);
+      }
+    };
+  } else if (
+    configs.originalPullRequest.sourceRepo.owner !== configs.originalPullRequest.targetRepo.owner ||
+    configs.originalPullRequest.state === "open") {
+    // 7. fetch pull request remote if source owner != target owner or pull request still open
+    yield async () => {
+      logger.debug("Fetching pull request remote..");
+      const prefix = git.gitClientType === GitClientType.GITLAB ? "merge-requests" : "pull"; // default is for gitlab
+      await git.gitCli.fetch(configs.folder, `${prefix}/${configs.originalPullRequest.number}/head:pr/${configs.originalPullRequest.number}`);
+    };
+  }
+
+  // 8. apply all changes to the new branch
+  yield async () => {
+    logger.debug("Cherry picking commits..");
+  };
+  for (const sha of configs.originalPullRequest.commits) {
+    yield async () => {
+      await git.gitCli.cherryPick(configs.folder, sha, configs.mergeStrategy, configs.mergeStrategyOption, configs.cherryPickOptions, configs.emptyCommit);
+    };
+  }
+
+  // stop early if backport already happened
+  let unchanged = false;
+  yield async () => {
+    unchanged = await git.gitCli.pointToSameCommit(configs.folder, backportPR.base, backportPR.head);
+    if (unchanged) {
+      logger.info("Nothing new to push, exiting early");
+    }
+  };
+  if (unchanged) {
+    return;
+  }
+
+  let target_remote: string | undefined = undefined;
+
+  if (backportPR.headRepo) {
+    // 9. add fork-remote to push backport branch to
+    target_remote = "fork";
+    yield async () => {
+        await git.gitCli.addRemote(configs.folder, backportPR.headRepo!.cloneUrl, target_remote);
+    };
+  }
+
+  if (!configs.dryRun) {
+    // 10. push the new branch to origin
+    yield async () => {
+      try {
+        await git.gitCli.push(configs.folder, backportPR.head, target_remote);
+      } catch (err) {
+        if (!(err instanceof NonFastForwardError)) {
+          throw err;
+        }
+        logger.info("Non-fast-forward remote branch");
+        // fetch the diverting remote
+        await git.gitCli.fetch(configs.folder, backportPR.head, target_remote);
+        if (
+          await git.gitCli.hasRemoteOriginalWork(configs.folder, backportPR.head, target_remote)
+        ) {
+          logger.info("Remote branch contains original work, aborting");
+          // throw original error: we cannot push in non-fast-forwarding way
+          throw err.cause;
+        }
+        if (
+          await git.gitCli.hasLocalOriginalWork(configs.folder, backportPR.head, target_remote)
+        ) {
+          logger.info("Force-pushing rebased branch");
+          await git.gitCli.push(configs.folder, backportPR.head, target_remote, true);
+        }
+      }
+    };
+
+    // 11. create pull request new branch -> target branch (using octokit)
+    yield async () => {
+      try{
+        const prUrl = await git.gitClientApi.createPullRequest(backportPR);
+        logger.info(`Pull request created: ${prUrl}`);
+      } catch (err) {
+        if (!(err instanceof PullRequestExists)) {
+          throw err;
+        }
+        logger.info(`Existing pull request updated: ${err.url}`);
+      }
+    };
+  } else {
+    yield async () => {
+      logger.warn("Pull request creation and remote push skipped");
+      logger.info(`${JSON.stringify(backportPR, null, 2)}`);
+    };
+  }
+}
+
+// backportScript reconstruct the git commands that were run to attempt the backport.
+async function backportScript(configs: Configs, backportPR: BackportPullRequest, git: Git, failed: number): Promise<string> {
+  let s = "";
+  const fakeLogger = {
+    debug: function(_message: string): void { /*discard*/ },
+    info: function(_message: string): void { /*discard*/ },
+    warn: function(_message: string): void { /*discard*/ },
+  };
+  const fakeGitCli: Git["gitCli"] = {
+    async clone(_from: string, _to: string, _branch: string): Promise<void> {
+      /* consider that the user already has the repo cloned (or knows how to clone) */
+      s += `git fetch origin ${backportPR.base}`;
+    },
+    async createLocalBranch(_cwd: string, newBranch: string): Promise<void> {
+      s += `git switch -c ${newBranch} origin/${backportPR.base}`;
+    },
+    async fetch(_cwd: string, branch: string, remote = "origin"): Promise<void> {
+      s += `git fetch ${remote} ${branch}`;
+    },
+    async hasRemoteOriginalWork(_cwd: string, _branch: string, _remote = "origin"): Promise<boolean> {
+      return false;
+    },
+    async hasLocalOriginalWork(_cwd: string, _branch: string, _remote = "origin"): Promise<boolean> {
+      return true;
+    },
+    async cherryPick(_cwd: string, sha: string, strategy = "recursive", strategyOption = "theirs", cherryPickOptions: string | undefined, emptyCommit = "stop"): Promise<void> {
+      s += `git cherry-pick -m 1 --strategy=${strategy} --strategy-option=${strategyOption} --empty=${emptyCommit} `;
+      if (cherryPickOptions !== undefined) {
+        s += cherryPickOptions + " ";
+      }
+      s += sha;
+    },
+    async pointToSameCommit(_cwd: string, refA: string, refB: string): Promise<boolean> {
+      s += "# check if there is anything to push";
+      return refA === refB; // always let the script continue (interesting case)
+    },
+    async addRemote(_cwd: string, remote: string, remoteName = "fork"): Promise<void> {
+      s += `git remote add ${remoteName} ${remote}`;
+    },
+    async push(_cwd: string, branch: string, remote = "origin", force = false): Promise<void> {
+      s += `git push ${remote} ${branch}`;
+      if (force) {
+        s += " --force";
+      }
+    }
+  };
+  let i = 0;
+  let steps = "";
+  for (const step of backportSteps(fakeLogger, configs, backportPR, {
+    gitClientType: git.gitClientType,
+    gitClientApi: {
+      async getLatestPullRequestComments(_prUrl: string): Promise<string[]> {
+        return [];
+      },
+      async createPullRequest(_backport: BackportPullRequest): Promise<string> {
+        s += `# ${git.gitClientType}.createPullRequest`;
+        return "";
+      },
+      async createPullRequestComment(_prUrl: string, _comment: string): Promise<string | undefined> {
+        s += `# ${git.gitClientType}.createPullRequestComment`;
+        return "";
+      }
+    },
+    gitCli: fakeGitCli,
+  })) {
+    if (i == failed) {
+      s += "# the step below failed\n";
+    }
+    await step();
+    if (s.length > 0 || i == failed) {
+      steps += s + "\n";
+      s = "";
+    }
+    i++;
+  }
+
+  return steps;
+}
