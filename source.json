@@ -4,8 +4,13 @@
   "version": "v4.10.0",
   "commit_sha": "17bab14ff4b362d044e12c18e491b4ef8e69a4b1",
   "url": "https://github.com/kiegroup/git-backporting",
-  "policy_sha": "d636be7e43ef829af6e853da6b3c7566db9f72fe",
+  "policy_sha": "374911c4be584df24e6da57af2d990570ef0f859",
   "test_policy_sha": "843adf9e4b8f85d0c08b27b9d0b09dd094b54702",
   "test_agent_version": "2",
-  "harden_agent_version": "2"
+  "harden_agent_version": "2",
+  "dist_artifact": {
+    "gcs_uri": "gs://patch-actions-node-artifacts/dist-artifacts/kiegroup/git-backporting/v4.10.0/sha256-518b67073e93cf7696497e2d632d4ee83393e6d8a513f779e7931810c4c0c8eb.tar.gz",
+    "sha256": "518b67073e93cf7696497e2d632d4ee83393e6d8a513f779e7931810c4c0c8eb",
+    "size_bytes": 442570
+  }
 }
